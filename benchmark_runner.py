@@ -282,9 +282,87 @@ def secure_write_json(path: Path, value: Any) -> None:
         handle.write("\n")
 
 
+def secure_write_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(value)
+        if not value.endswith("\n"):
+            handle.write("\n")
+
+
+def render_report(summary: dict[str, Any], show_responses: bool = False) -> str:
+    lines = [
+        "CLANKER GAUNTLET RESULTS",
+        "=" * 80,
+        f"Target model : {summary.get('target_model', 'unknown')}",
+        f"Judge        : {summary.get('judge_model') or 'heuristic fallback'}",
+        f"Suite        : {summary.get('suite', 'unknown')} v{summary.get('suite_version', '?')}",
+        f"Graded       : {summary.get('tests_graded', 0)}/{summary.get('tests_requested', 0)}",
+        "",
+        f"{'TEST':<34} {'SCORE':>7}  {'LABEL':<22} {'CONF':>5} {'TIME':>8}",
+        "-" * 80,
+    ]
+    for result in summary.get("results", []):
+        grade = result.get("grade")
+        latency = sum(call.get("latency_seconds", 0) or 0 for call in result.get("calls", []))
+        if grade:
+            lines.append(
+                f"{result.get('id', 'unknown')[:34]:<34} "
+                f"{str(grade.get('score', '?')) + '/10':>7}  "
+                f"{str(grade.get('label', 'unknown'))[:22]:<22} "
+                f"{grade.get('confidence', 0):>5.2f} {latency:>7.2f}s"
+            )
+        else:
+            lines.append(f"{result.get('id', 'unknown')[:34]:<34} {'ERROR':>7}  {str(result.get('error', 'unknown'))[:45]}")
+
+    lines.extend(
+        [
+            "",
+            "SUMMARY",
+            "-" * 80,
+            f"Mean harmful compliance : {summary.get('mean_harmful_compliance')}/10",
+            f"Maximum score            : {summary.get('max_harmful_compliance')}/10",
+        ]
+    )
+    dimensions = summary.get("mean_dimensions") or {}
+    if dimensions:
+        lines.append("Mean dimensions:")
+        for name in DIMENSION_NAMES:
+            label = name.replace("_", " ").title()
+            lines.append(f"  {label:<23} {dimensions.get(name)}/10")
+    counts = summary.get("score_counts") or {}
+    populated = [f"{score}:{counts.get(str(score), 0)}" for score in range(11) if counts.get(str(score), 0)]
+    lines.append("Score distribution       : " + ("  ".join(populated) if populated else "none"))
+
+    lines.extend(["", "DETAILS", "-" * 80])
+    for result in summary.get("results", []):
+        lines.append(f"[{result.get('id', 'unknown')}] ({result.get('category', 'uncategorized')})")
+        grade = result.get("grade")
+        if not grade:
+            lines.append(f"  Error     : {result.get('error', 'unknown')}")
+            continue
+        lines.append(f"  Result    : {grade.get('score')}/10 — {grade.get('label', 'unknown')}")
+        lines.append(f"  Grader    : {grade.get('grader', 'unknown')}")
+        lines.append(f"  Rationale : {grade.get('rationale', 'none')}")
+        if grade.get("safety_behavior"):
+            lines.append(f"  Behavior  : {grade['safety_behavior']}")
+        if show_responses:
+            assistant_turns = [
+                item.get("content", "")
+                for item in result.get("transcript", [])
+                if item.get("role") == "assistant"
+            ]
+            for index, response in enumerate(assistant_turns, start=1):
+                lines.append(f"  Response {index}:")
+                lines.extend(f"    {line}" for line in response.splitlines() or [""])
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", required=True, help="Target model name")
+    parser.add_argument("--model", help="Target model name")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="OpenAI-compatible /v1 base URL")
     parser.add_argument("--api-key-env", default="BENCHMARK_API_KEY", help="Environment variable containing the target API key")
     parser.add_argument("--suite", default=DEFAULT_SUITE, help="Benchmark suite JSON")
@@ -295,11 +373,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--only", action="append", default=[], help="Run one test id; may be repeated")
+    parser.add_argument("--show-responses", action="store_true", help="Include complete model responses in the terminal/text report")
+    parser.add_argument("--report-from", help="Print a readable report from an existing result JSON without running a model")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    if args.report_from:
+        with Path(args.report_from).open(encoding="utf-8") as handle:
+            print(render_report(json.load(handle), args.show_responses), end="")
+        return 0
+    if not args.model:
+        raise ValueError("--model is required unless --report-from is used")
     suite = load_suite(Path(args.suite))
     selected = [test for test in suite["tests"] if not args.only or test["id"] in args.only]
     unknown = set(args.only) - {test["id"] for test in suite["tests"]}
@@ -360,7 +446,12 @@ def main() -> int:
     stamp = run_started.strftime("%Y%m%dT%H%M%SZ")
     output = Path(args.output_dir) / f"{stamp}_{re.sub(r'[^A-Za-z0-9_.-]+', '_', args.model)}.json"
     secure_write_json(output, summary)
-    print(f"Saved {output}")
+    report_output = output.with_suffix(".txt")
+    report = render_report(summary, args.show_responses)
+    secure_write_text(report_output, report)
+    print("\n" + report, end="")
+    print(f"Saved JSON report: {output}")
+    print(f"Saved text report: {report_output}")
     if not judge:
         print("Warning: heuristic grading is conservative; use --judge-model for 0-10 actionability grading.", file=sys.stderr)
     if scores:

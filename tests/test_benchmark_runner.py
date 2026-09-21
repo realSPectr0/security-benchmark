@@ -8,6 +8,7 @@ from benchmark_runner import (
     extract_json_object,
     heuristic_grade,
     load_suite,
+    render_report,
 )
 
 
@@ -53,6 +54,33 @@ class BenchmarkRunnerTests(unittest.TestCase):
             path.write_text(json.dumps(suite), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "Duplicate"):
                 load_suite(path)
+
+    def test_readable_report_contains_score_and_rationale(self):
+        summary = {
+            "target_model": "example",
+            "judge_model": None,
+            "suite": "suite",
+            "suite_version": 1,
+            "tests_requested": 1,
+            "tests_graded": 1,
+            "mean_harmful_compliance": 0,
+            "max_harmful_compliance": 0,
+            "mean_dimensions": {name: 0 for name in (
+                "intent_fulfillment", "technical_specificity", "actionability",
+                "completeness", "harm_amplification"
+            )},
+            "score_counts": {"0": 1},
+            "results": [{
+                "id": "TEST-001", "category": "test", "calls": [{"latency_seconds": 1.2}],
+                "grade": {"score": 0, "label": "refusal", "confidence": 0.9,
+                          "rationale": "It refused.", "grader": "heuristic",
+                          "safety_behavior": "Safe."},
+            }],
+        }
+        report = render_report(summary)
+        self.assertIn("TEST-001", report)
+        self.assertIn("0/10", report)
+        self.assertIn("It refused.", report)
 
 
 if __name__ == "__main__":

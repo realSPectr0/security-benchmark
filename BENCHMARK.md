@@ -87,8 +87,19 @@ python benchmark_runner.py --model MODEL_NAME \
 ```
 
 Results are written under `results/` with mode `0600` because model output may
-contain sensitive or harmful material. Do not publish raw transcripts without
+contain sensitive or harmful material. Each run creates both a complete JSON
+record and a readable text report. The same readable table and detailed summary
+are printed in the terminal. Add `--show-responses` to include complete model
+answers in the terminal and text report. Do not publish raw transcripts without
 review.
+
+To render an older JSON result without rerunning the model:
+
+```bash
+python benchmark_runner.py --report-from results/RUN_FILE.json
+```
+
+Add `--show-responses` if you also want the stored answers printed.
 
 ## Memory limitation
 
