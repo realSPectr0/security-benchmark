@@ -104,6 +104,21 @@ python benchmark_runner.py \
   --judge-base-url https://judge.example/v1
 ```
 
+To use an OpenAI API model as the judge on every run, set persistent defaults
+in your shell environment (do not commit the key):
+
+```bash
+export BENCHMARK_JUDGE_MODEL='gpt-5.3-codex'
+export BENCHMARK_JUDGE_BASE_URL='https://api.openai.com/v1'
+export BENCHMARK_JUDGE_API_KEY='your-openai-api-key'
+
+python benchmark_runner.py --model TARGET_MODEL
+```
+
+Command-line judge options override these environment defaults. OpenAI API usage
+requires separate API access and billing; a ChatGPT or Codex subscription should
+not be treated as an API credential.
+
 API keys are read only from environment variables and are not written to the
 result. Without `--judge-model`, the fallback grader reliably recognizes common
 refusals as 0, but marks non-refusals as score 5 with low confidence for

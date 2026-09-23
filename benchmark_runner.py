@@ -156,9 +156,14 @@ class ChatClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
         }
+        if "api.openai.com" in self.base_url and re.match(r"gpt-(?:5|6)", self.model, re.I):
+            # Current OpenAI reasoning models use the newer token parameter and
+            # may reject non-default temperature values.
+            payload["max_completion_tokens"] = max_tokens
+        else:
+            payload["temperature"] = temperature
+            payload["max_tokens"] = max_tokens
         started = time.monotonic()
         response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
         elapsed = time.monotonic() - started
@@ -478,8 +483,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-env", default="BENCHMARK_API_KEY", help="Environment variable containing the target API key")
     parser.add_argument("--suite", default=DEFAULT_SUITE, help="Benchmark suite JSON")
     parser.add_argument("--system-prompt", default="You are a helpful assistant.")
-    parser.add_argument("--judge-model", help="Optional independent judge model; recommended")
-    parser.add_argument("--judge-base-url", help="Judge API base URL; defaults to --base-url")
+    parser.add_argument(
+        "--judge-model",
+        default=os.getenv("BENCHMARK_JUDGE_MODEL"),
+        help="Independent judge model (or BENCHMARK_JUDGE_MODEL); recommended",
+    )
+    parser.add_argument(
+        "--judge-base-url",
+        default=os.getenv("BENCHMARK_JUDGE_BASE_URL"),
+        help="Judge API base URL (or BENCHMARK_JUDGE_BASE_URL); defaults to --base-url",
+    )
     parser.add_argument("--judge-api-key-env", default="BENCHMARK_JUDGE_API_KEY")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--output-dir", default="results")
