@@ -4,7 +4,9 @@
 
 Clanker Gauntlet is a research-oriented framework for evaluating how large language models behave under adversarial and security-sensitive interactions.
 
-The benchmark runs structured, multi-turn test cases against OpenAI-compatible LLM endpoints and records complete transcripts, latency, API metadata, and graded harmful-compliance results.
+The benchmark has two parts. It runs structured, multi-turn safety questions and
+also measures whether a model can solve objectively verified, timed security
+challenges. The initial challenge adapter supports OverTheWire Bandit.
 
 The project is intended for controlled AI security research, model comparison, and experimentation with emerging LLM attack surfaces such as prompt manipulation and memory poisoning.
 
@@ -24,6 +26,9 @@ The project is intended for controlled AI security research, model comparison, a
 - Save complete experiment results as JSON
 - Preserve latency and provider usage metadata
 - Support manual review and reproducible model comparison
+- Run timed OverTheWire Bandit challenges through a constrained SSH harness
+- Verify a solve by authenticating to the next level rather than trusting model output
+- Redact OverTheWire credentials from saved results
 
 ---
 
@@ -132,7 +137,8 @@ These dimensions make it possible to distinguish between a response that merely 
 security-benchmark/
 │
 ├── benchmarks/
-│   └── refusal_memory.json
+│   ├── refusal_memory.json
+│   └── overthewire_bandit.json
 │
 ├── platform/
 │
@@ -140,6 +146,8 @@ security-benchmark/
 │
 ├── BENCHMARK.md
 ├── benchmark_runner.py
+├── challenge_runner.py
+├── benchmark-requirements.txt
 ├── cheat_test.py
 ├── dashboard.py
 ├── setup.sh
@@ -155,6 +163,13 @@ Core benchmark engine. Sends test cases to a target model, records responses and
 **`benchmarks/refusal_memory.json`**
 
 Security test suite containing refusal, multi-turn, and memory-oriented benchmark cases.
+
+**`challenge_runner.py`**
+
+Timed agent loop for OverTheWire Bandit. It fetches current goals from the
+official site, executes constrained commands over SSH, and verifies each solve by
+logging in as the next level. See `BENCHMARK.md` for safety and credential-handling
+details.
 
 **`BENCHMARK.md`**
 
@@ -192,11 +207,15 @@ Activate the virtual environment:
 source venv/bin/activate
 ```
 
-The setup script creates a Python virtual environment and installs the dependencies defined under `platform/requirements.txt`.
+The setup script creates a Python virtual environment and installs both the
+platform and benchmark-runner dependencies.
 
 ---
 
 # Quick Start
+
+The two parts deliberately produce separate scores: harmful-compliance results
+for questions and objective solve/time results for challenges.
 
 ## Ollama
 
@@ -213,6 +232,18 @@ The default OpenAI-compatible endpoint is:
 ```text
 http://localhost:11434/v1
 ```
+
+Run the default timed Bandit challenge set (levels 0 through 4):
+
+```bash
+python challenge_runner.py \
+    --model MODEL_NAME \
+    --accept-new-host-key
+```
+
+Using `--accept-new-host-key` is convenient for a first run. For stronger host
+verification, connect once with the normal SSH client, verify the fingerprint,
+and then omit that option. Challenge credentials are redacted from reports.
 
 ---
 
