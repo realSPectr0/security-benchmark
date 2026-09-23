@@ -180,10 +180,33 @@ def connect_ssh(host: str, port: int, username: str, password: str, timeout: flo
 
 def execute_remote(client: Any, command: str, timeout: float) -> tuple[str, float]:
     started = time.monotonic()
-    _, stdout, stderr = client.exec_command(command, timeout=timeout)
-    exit_status = stdout.channel.recv_exit_status()
-    out = stdout.read(MAX_CAPTURE_CHARS).decode("utf-8", errors="replace")
-    err = stderr.read(MAX_CAPTURE_CHARS).decode("utf-8", errors="replace")
+    transport = client.get_transport()
+    if transport is None or not transport.is_active():
+        raise RuntimeError("SSH transport is not active")
+    channel = transport.open_session(timeout=timeout)
+    channel.exec_command(command)
+    stdout = bytearray()
+    stderr = bytearray()
+    try:
+        while True:
+            while channel.recv_ready():
+                chunk = channel.recv(4096)
+                if len(stdout) < MAX_CAPTURE_CHARS:
+                    stdout.extend(chunk[: MAX_CAPTURE_CHARS - len(stdout)])
+            while channel.recv_stderr_ready():
+                chunk = channel.recv_stderr(4096)
+                if len(stderr) < MAX_CAPTURE_CHARS:
+                    stderr.extend(chunk[: MAX_CAPTURE_CHARS - len(stderr)])
+            if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                break
+            if time.monotonic() - started >= timeout:
+                raise TimeoutError(f"Remote command exceeded {timeout:.1f}s")
+            time.sleep(0.05)
+        exit_status = channel.recv_exit_status()
+    finally:
+        channel.close()
+    out = bytes(stdout).decode("utf-8", errors="replace")
+    err = bytes(stderr).decode("utf-8", errors="replace")
     elapsed = time.monotonic() - started
     combined = f"exit={exit_status}\nstdout:\n{out}\nstderr:\n{err}".strip()
     return combined[-MAX_CAPTURE_CHARS:], elapsed
@@ -219,7 +242,9 @@ def solve_level(
         {"role": "user", "content": prompt},
     ]
     events: list[dict[str, Any]] = []
-    known_credentials = [password]
+    # bandit0 is both the public bootstrap password and the username; redacting it
+    # would make harmless command paths unreadable. Non-public credentials are redacted.
+    known_credentials = [] if level == 0 and password == "bandit0" else [password]
     model_seconds = 0.0
     command_seconds = 0.0
     started = time.monotonic()
@@ -321,7 +346,8 @@ def render_challenge_report(summary: dict[str, Any]) -> str:
         "=" * 86,
         f"Target model : {summary['target_model']}",
         f"Game         : {summary['game']}",
-        f"Levels       : {summary['start_level']} through {summary['end_level'] - 1}",
+        f"Requested    : levels {summary['start_level']} through {summary['end_level'] - 1}",
+        f"Attempted    : {summary['levels_attempted']} (chaining stops after the first unsolved level)",
         "",
         f"{'LEVEL':<20} {'RESULT':<12} {'TOTAL':>10} {'MODEL':>10} {'SHELL':>10} {'ACTIONS':>8}",
         "-" * 86,

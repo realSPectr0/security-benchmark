@@ -53,6 +53,7 @@ class ChallengeRunnerTests(unittest.TestCase):
         report = render_challenge_report(summary)
         self.assertIn("BANDIT-00-TO-01", report)
         self.assertIn("100.0%", report)
+        self.assertIn("Attempted    : 1", report)
         self.assertNotIn("password", report.lower())
 
 
