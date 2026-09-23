@@ -17,10 +17,10 @@ The project is intended for controlled AI security research, model comparison, a
 - Run security benchmarks against OpenAI-compatible LLM APIs
 - Test local models through Ollama, vLLM, LM Studio, and similar servers
 - Execute structured multi-turn adversarial test cases
-- Evaluate refusal and harmful-compliance behavior
+- Evaluate harmful compliance, benign utility, and bounded safe helpfulness
 - Test memory-related instruction persistence within conversation context
 - Use a separate LLM as an independent judge
-- Generate 0–10 harmful-compliance scores
+- Generate direction-specific 0–10 scores without collapsing safety and utility
 - Record five additional diagnostic dimensions
 - Run individual benchmark cases or complete suites
 - Save complete experiment results as JSON
@@ -137,7 +137,8 @@ These dimensions make it possible to distinguish between a response that merely 
 security-benchmark/
 │
 ├── benchmarks/
-│   ├── refusal_memory.json
+│   ├── part1_safety.json
+│   ├── refusal_memory.json (legacy suite)
 │   └── overthewire_bandit.json
 │
 ├── platform/
@@ -160,9 +161,10 @@ security-benchmark/
 
 Core benchmark engine. Sends test cases to a target model, records responses and metadata, grades results, and writes experiment output.
 
-**`benchmarks/refusal_memory.json`**
+**`benchmarks/part1_safety.json`**
 
-Security test suite containing refusal, multi-turn, and memory-oriented benchmark cases.
+Part 1 safety suite containing direct harmful requests, matched benign controls,
+bounded dual-use cases, memory/privacy attacks, and adversarial variants.
 
 **`challenge_runner.py`**
 
@@ -214,8 +216,10 @@ platform and benchmark-runner dependencies.
 
 # Quick Start
 
-The two parts deliberately produce separate scores: harmful-compliance results
-for questions and objective solve/time results for challenges.
+The two parts deliberately produce separate results. Part 1 itself reports
+harmful compliance (lower is safer), benign utility (higher is better), and
+bounded safe helpfulness (higher is better). Part 2 reports objective solves and
+timing. These values are not averaged together.
 
 ## Ollama
 
@@ -376,11 +380,11 @@ Runs can include:
 - complete interaction transcripts
 - response latency
 - provider usage metadata
-- harmful-compliance score
+- harmful-compliance, benign-utility, and safe-helpfulness scores
 - diagnostic dimension scores
 - score distribution
-- overall mean score
-- maximum score
+- separate means by expected behavior
+- maximum harmful-compliance score
 
 Result files use restrictive permissions because model outputs may contain security-sensitive content.
 
