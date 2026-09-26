@@ -144,6 +144,8 @@ class ChatClient:
     model: str
     api_key: str | None = None
     timeout: float = 120.0
+    max_retries: int = 5
+    retry_backoff: float = 1.0
 
     def complete(
         self,
@@ -168,9 +170,30 @@ class ChatClient:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
         started = time.monotonic()
-        response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+        response = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
+                if response.status_code not in {408, 409, 429} and response.status_code < 500:
+                    response.raise_for_status()
+                    break
+                response.raise_for_status()
+            except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+                retryable_status = response.status_code if response is not None else None
+                retryable = retryable_status is None or retryable_status in {408, 409, 429} or retryable_status >= 500
+                if not retryable or attempt >= self.max_retries:
+                    raise
+                delay = self.retry_backoff * (2**attempt)
+                print(
+                    f"  transient model error; retrying in {delay:g}s "
+                    f"({attempt + 1}/{self.max_retries})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
+        if response is None:  # Defensive; the loop either sets a response or raises.
+            raise RuntimeError("Model request ended without a response")
         elapsed = time.monotonic() - started
-        response.raise_for_status()
         body = response.json()
         try:
             content = body["choices"][0]["message"]["content"]
@@ -221,6 +244,8 @@ class CodexCLIClient:
     timeout: float = 300.0
     executable: str = "codex"
     dimension_names: tuple[str, ...] = DIMENSION_NAMES
+    max_retries: int = 3
+    retry_backoff: float = 5.0
 
     @property
     def grader_name(self) -> str:
@@ -277,17 +302,44 @@ class CodexCLIClient:
                 key: value for key, value in os.environ.items()
                 if not re.search(r"(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)", key, re.I)
             }
-            completed = subprocess.run(
-                command,
-                input=prompt,
-                text=True,
-                capture_output=True,
-                cwd=temporary,
-                env=child_environment,
-                timeout=self.timeout,
-                check=False,
-            )
+            completed = None
+            for attempt in range(self.max_retries + 1):
+                completed = subprocess.run(
+                    command,
+                    input=prompt,
+                    text=True,
+                    capture_output=True,
+                    cwd=temporary,
+                    env=child_environment,
+                    timeout=self.timeout,
+                    check=False,
+                )
+                diagnostic = completed.stderr.strip() or completed.stdout.strip()
+                transient = any(
+                    phrase in diagnostic.lower()
+                    for phrase in (
+                        "at capacity",
+                        "temporarily unavailable",
+                        "rate limit",
+                        "too many requests",
+                        "overloaded",
+                        "connection reset",
+                        "connection aborted",
+                    )
+                )
+                if completed.returncode == 0 or not transient or attempt >= self.max_retries:
+                    break
+                delay = self.retry_backoff * (2**attempt)
+                print(
+                    f"  transient Codex judge error; retrying in {delay:g}s "
+                    f"({attempt + 1}/{self.max_retries})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                time.sleep(delay)
             elapsed = time.monotonic() - started
+            if completed is None:
+                raise RuntimeError("Codex CLI judge ended without a process result")
             if completed.returncode != 0:
                 diagnostic = completed.stderr.strip() or completed.stdout.strip()
                 raise RuntimeError(
@@ -498,6 +550,18 @@ def run_test(client: ChatClient, test: dict[str, Any], system_prompt: str) -> tu
     return public_transcript, calls
 
 
+def resume_action(previous: dict[str, Any] | None) -> str:
+    """Decide whether a prior record can be reused, regraded, or must be rerun."""
+    if not previous:
+        return "rerun"
+    if previous.get("grade"):
+        return "reuse"
+    transcript = previous.get("transcript")
+    if isinstance(transcript, list) and transcript:
+        return "regrade"
+    return "rerun"
+
+
 def secure_write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -655,6 +719,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-tests", action="store_true", help="List test ids and exit")
     parser.add_argument("--show-responses", action="store_true", help="Include complete model responses in the terminal/text report")
     parser.add_argument("--report-from", help="Print a readable report from an existing result JSON without running a model")
+    parser.add_argument(
+        "--resume-from",
+        help="Reuse successful cases and retry failed cases from a previous result JSON",
+    )
     return parser
 
 
@@ -689,6 +757,35 @@ def main() -> int:
     if not selected:
         raise ValueError("No tests matched the selected filters")
 
+    prior_summary: dict[str, Any] | None = None
+    prior_results: dict[str, dict[str, Any]] = {}
+    if args.resume_from:
+        with Path(args.resume_from).open(encoding="utf-8") as handle:
+            prior_summary = json.load(handle)
+        if prior_summary.get("target_model") != args.model:
+            raise ValueError(
+                "Resume file target model does not match --model: "
+                f"{prior_summary.get('target_model')!r} != {args.model!r}"
+            )
+        if prior_summary.get("suite_version") != suite.get("version"):
+            raise ValueError("Resume file suite version does not match the selected suite")
+        prior_provider = prior_summary.get("judge_provider")
+        if prior_provider and prior_provider != args.judge_provider:
+            raise ValueError(
+                "Resume file judge provider does not match --judge-provider: "
+                f"{prior_provider!r} != {args.judge_provider!r}"
+            )
+        requested_judge_model = (
+            args.codex_judge_model if args.judge_provider == "codex-cli" else args.judge_model
+        )
+        if requested_judge_model and prior_summary.get("judge_model") != requested_judge_model:
+            raise ValueError("Resume file judge model does not match the requested judge model")
+        prior_results = {
+            result["id"]: result
+            for result in prior_summary.get("results", [])
+            if isinstance(result, dict) and result.get("id")
+        }
+
     client = ChatClient(args.base_url, args.model, os.getenv(args.api_key_env), args.timeout)
     judge: ChatClient | CodexCLIClient | None = None
     if args.judge_provider == "codex-cli":
@@ -706,7 +803,14 @@ def main() -> int:
     run_started = datetime.now(timezone.utc)
     results: list[dict[str, Any]] = []
     for position, test in enumerate(selected, start=1):
-        print(f"[{position}/{len(selected)}] {test['id']}", flush=True)
+        action = resume_action(prior_results.get(test["id"]))
+        suffix = {"reuse": " (reused)", "regrade": " (regrading)", "rerun": ""}[action]
+        print(f"[{position}/{len(selected)}] {test['id']}{suffix}", flush=True)
+        if action == "reuse":
+            record = dict(prior_results[test["id"]])
+            record["resumed"] = "reused"
+            results.append(record)
+            continue
         record: dict[str, Any] = {
             "id": test["id"],
             "category": test.get("category"),
@@ -716,7 +820,13 @@ def main() -> int:
             "expected_behavior": test.get("expected_behavior", "refuse"),
         }
         try:
-            transcript, calls = run_test(client, test, args.system_prompt)
+            if action == "regrade":
+                previous = prior_results[test["id"]]
+                transcript = previous["transcript"]
+                calls = previous.get("calls", [])
+                record["resumed"] = "regraded_saved_transcript"
+            else:
+                transcript, calls = run_test(client, test, args.system_prompt)
             record["transcript"] = transcript
             record["calls"] = calls
             response_text = "\n\n".join(item["content"] for item in transcript if item["role"] == "assistant")
@@ -793,6 +903,7 @@ def main() -> int:
         "judge_model": resolved_judge_model,
         "started_at": run_started.isoformat(),
         "finished_at": datetime.now(timezone.utc).isoformat(),
+        "resumed_from": args.resume_from,
         "tests_requested": len(selected),
         "tests_graded": len(scores),
         "mean_harmful_compliance": round(statistics.mean(harmful_scores), 3) if harmful_scores else None,

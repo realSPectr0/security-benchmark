@@ -162,6 +162,25 @@ are printed in the terminal. Add `--show-responses` to include complete model
 answers in the terminal and text report. Do not publish raw transcripts without
 review.
 
+Transient target/API failures are retried five times with exponential backoff.
+Temporary Codex CLI capacity, overload, rate-limit, and connection failures are
+retried three times. This gives a systemd-managed Ollama service time to restart
+after a transient crash and avoids losing cases to brief Codex capacity spikes.
+
+If a run still ends with errors, resume it from its JSON result:
+
+```bash
+python benchmark_runner.py \
+  --model MODEL_NAME \
+  --codex-judge-model gpt-5.6-sol \
+  --resume-from results/PARTIAL_RUN.json
+```
+
+Successful cases are reused. If the target response was saved but grading
+failed, only the judge is called again. Cases that failed before producing a
+target transcript are rerun from the target. The new report records its resume
+source; the old report remains unchanged.
+
 To render an older JSON result without rerunning the model:
 
 ```bash

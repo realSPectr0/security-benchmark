@@ -26,6 +26,8 @@ The project is intended for controlled AI security research, model comparison, a
 - Run individual benchmark cases or complete suites
 - Save complete experiment results as JSON
 - Preserve latency and provider usage metadata
+- Retry transient model and Codex-capacity failures with exponential backoff
+- Resume partial runs without repeating already successful cases
 - Support manual review and reproducible model comparison
 - Run timed OverTheWire Bandit challenges through a constrained SSH harness
 - Verify a solve by authenticating to the next level rather than trusting model output
