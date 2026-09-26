@@ -79,51 +79,60 @@ python benchmark_runner.py --model MODEL_NAME
 
 Ollama's default OpenAI-compatible base URL is
 `http://localhost:11434/v1`. Use `--base-url` for vLLM, LM Studio, or another
-compatible server.
+compatible server. By default, grading uses the installed Codex CLI. Sign in
+once with ChatGPT before the first run:
 
-### Use an independent judge
+```bash
+codex login
+codex login status
+```
 
-An LLM judge is strongly recommended for the full 0–10 scale:
+### Codex CLI judge (default)
+
+The default judge launches one ephemeral, non-interactive Codex session per
+test. It uses the Codex CLI model configured for your ChatGPT account, requests
+a strict JSON grade, runs with a read-only sandbox, and does not forward API
+keys, tokens, passwords, or secret environment variables into the child
+process.
+
+```bash
+python benchmark_runner.py --model TARGET_MODEL
+```
+
+Select a particular model exposed by your Codex plan if desired:
 
 ```bash
 python benchmark_runner.py \
   --model TARGET_MODEL \
-  --base-url http://localhost:11434/v1 \
-  --judge-model JUDGE_MODEL
+  --codex-judge-model gpt-5.6-sol
 ```
 
-The judge can use a different endpoint and key:
+Omit `--codex-judge-model` to follow your Codex CLI configuration. Codex CLI
+grading consumes the ChatGPT plan's Codex allowance and is slower than a direct
+API judge. A full 44-case run starts 44 independent judge sessions.
+
+### API or heuristic judge
+
+To use an OpenAI-compatible API judge instead, choose the API provider
+explicitly:
 
 ```bash
-export BENCHMARK_API_KEY='target-key'
 export BENCHMARK_JUDGE_API_KEY='judge-key'
 python benchmark_runner.py \
   --model TARGET_MODEL \
-  --base-url https://target.example/v1 \
+  --judge-provider api \
   --judge-model JUDGE_MODEL \
   --judge-base-url https://judge.example/v1
 ```
 
-To use an OpenAI API model as the judge on every run, set persistent defaults
-in your shell environment (do not commit the key):
-
-```bash
-export BENCHMARK_JUDGE_MODEL='gpt-5.3-codex'
-export BENCHMARK_JUDGE_BASE_URL='https://api.openai.com/v1'
-export BENCHMARK_JUDGE_API_KEY='your-openai-api-key'
-
-python benchmark_runner.py --model TARGET_MODEL
-```
-
-Command-line judge options override these environment defaults. OpenAI API usage
-requires separate API access and billing; a ChatGPT or Codex subscription should
-not be treated as an API credential.
+API judge defaults can also be set with `BENCHMARK_JUDGE_MODEL` and
+`BENCHMARK_JUDGE_BASE_URL`. API usage requires separate API billing; ChatGPT
+plan allowance does not pay for this path.
 
 API keys are read only from environment variables and are not written to the
-result. Without `--judge-model`, the fallback grader reliably recognizes common
-refusals as 0, but marks non-refusals as score 5 with low confidence for
-manual review. A string heuristic cannot determine whether technical output is
-actually actionable.
+result. To deliberately use the limited string fallback, pass
+`--judge-provider heuristic`. It recognizes common refusals but cannot reliably
+assess technical accuracy or actionability.
 
 The runner also rejects a common inverted judge result on harmful cases: a high compliance score
 whose own rationale says the target refused. It records both the rejected grade
@@ -134,7 +143,6 @@ Run a subset by repeating `--only`:
 
 ```bash
 python benchmark_runner.py --model MODEL_NAME \
-  --judge-model JUDGE_MODEL \
   --only MEM-POLICY-OVERRIDE-001 \
   --only HARM-PHISHING-001
 ```
@@ -143,7 +151,7 @@ List the current questions or run one complete subpart:
 
 ```bash
 python benchmark_runner.py --list-tests
-python benchmark_runner.py --model MODEL_NAME --judge-model JUDGE_MODEL \
+python benchmark_runner.py --model MODEL_NAME \
   --subpart benign_controls
 ```
 

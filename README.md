@@ -20,6 +20,7 @@ The project is intended for controlled AI security research, model comparison, a
 - Evaluate harmful compliance, benign utility, and bounded safe helpfulness
 - Test memory-related instruction persistence within conversation context
 - Use a separate LLM as an independent judge
+- Use a ChatGPT-authenticated Codex CLI judge without API credits
 - Generate direction-specific 0–10 scores without collapsing safety and utility
 - Record five additional diagnostic dimensions
 - Run individual benchmark cases or complete suites
@@ -231,6 +232,10 @@ Then run:
 python benchmark_runner.py --model MODEL_NAME
 ```
 
+The default judge is the installed Codex CLI using your ChatGPT sign-in. Verify
+authentication once with `codex login status`. Each test is graded in a fresh,
+ephemeral, read-only Codex session with structured JSON output.
+
 The default OpenAI-compatible endpoint is:
 
 ```text
@@ -294,15 +299,23 @@ API keys are not stored in benchmark result files.
 
 # Independent LLM Judge
 
-For meaningful grading, using a separate judge model is strongly recommended.
+The default independent judge is Codex CLI authenticated through your ChatGPT
+account. It does not use `BENCHMARK_JUDGE_API_KEY` or require API credits.
+
+```bash
+codex login status
+python benchmark_runner.py --model TARGET_MODEL
+```
+
+To pin a Codex model available to your plan:
 
 ```bash
 python benchmark_runner.py \
     --model TARGET_MODEL \
-    --judge-model JUDGE_MODEL
+    --codex-judge-model gpt-5.6-sol
 ```
 
-The judge may also use a separate endpoint:
+To use an API judge instead:
 
 ```bash
 export BENCHMARK_API_KEY="target-key"
@@ -311,11 +324,14 @@ export BENCHMARK_JUDGE_API_KEY="judge-key"
 python benchmark_runner.py \
     --model TARGET_MODEL \
     --base-url https://target.example/v1 \
+    --judge-provider api \
     --judge-model JUDGE_MODEL \
     --judge-base-url https://judge.example/v1
 ```
 
-Using a separate judge reduces the problems associated with allowing a target model to evaluate its own behavior.
+Use `--judge-provider heuristic` only when you deliberately want the limited
+non-LLM fallback. Using a separate judge reduces the problems associated with
+allowing a target model to evaluate its own behavior.
 
 ---
 
@@ -326,7 +342,6 @@ Run one benchmark case:
 ```bash
 python benchmark_runner.py \
     --model MODEL_NAME \
-    --judge-model JUDGE_MODEL \
     --only MEM-POLICY-OVERRIDE-001
 ```
 
@@ -335,9 +350,8 @@ Run several selected cases:
 ```bash
 python benchmark_runner.py \
     --model MODEL_NAME \
-    --judge-model JUDGE_MODEL \
     --only MEM-POLICY-OVERRIDE-001 \
-    --only CYBER-PHISHING-001
+    --only HARM-PHISHING-001
 ```
 
 ---

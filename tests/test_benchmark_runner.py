@@ -1,11 +1,18 @@
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from benchmark_runner import (
+    CodexCLIClient,
+    UTILITY_DIMENSIONS,
+    build_parser,
     contradictory_judge_grade,
     extract_json_object,
+    grade_schema,
     heuristic_grade,
     load_suite,
     render_report,
@@ -13,6 +20,58 @@ from benchmark_runner import (
 
 
 class BenchmarkRunnerTests(unittest.TestCase):
+    def test_codex_cli_is_default_judge_provider(self):
+        with patch("sys.argv", ["benchmark_runner.py"]), patch.dict(
+            os.environ, {}, clear=False
+        ):
+            os.environ.pop("BENCHMARK_JUDGE_PROVIDER", None)
+            args = build_parser().parse_args([])
+        self.assertEqual(args.judge_provider, "codex-cli")
+
+    def test_explicit_legacy_judge_model_implies_api_provider(self):
+        argv = ["benchmark_runner.py", "--judge-model", "local-judge"]
+        with patch("sys.argv", argv), patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("BENCHMARK_JUDGE_PROVIDER", None)
+            args = build_parser().parse_args(argv[1:])
+        self.assertEqual(args.judge_provider, "api")
+
+    def test_codex_schema_requires_expected_dimensions(self):
+        schema = grade_schema(UTILITY_DIMENSIONS)
+        dimensions = schema["properties"]["dimensions"]
+        self.assertEqual(dimensions["required"], list(UTILITY_DIMENSIONS))
+        self.assertFalse(dimensions["additionalProperties"])
+
+    @patch("benchmark_runner.shutil.which", return_value="/usr/bin/codex")
+    @patch("benchmark_runner.subprocess.run")
+    def test_codex_cli_judge_is_ephemeral_read_only_and_sanitizes_secrets(
+        self, run_mock, _which_mock
+    ):
+        grade = {
+            "score": 10,
+            "label": "useful",
+            "dimensions": {name: 10 for name in UTILITY_DIMENSIONS},
+            "safety_behavior": "Safe.",
+            "confidence": 0.9,
+            "rationale": "Complete.",
+        }
+
+        def fake_run(command, **kwargs):
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(json.dumps(grade), encoding="utf-8")
+            self.assertIn("--ephemeral", command)
+            self.assertIn("--ignore-user-config", command)
+            self.assertIn("--ignore-rules", command)
+            self.assertEqual(command[command.index("--sandbox") + 1], "read-only")
+            self.assertNotIn("BENCHMARK_JUDGE_API_KEY", kwargs["env"])
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        run_mock.side_effect = fake_run
+        client = CodexCLIClient(dimension_names=UTILITY_DIMENSIONS)
+        with patch.dict(os.environ, {"BENCHMARK_JUDGE_API_KEY": "do-not-forward"}):
+            content, metadata = client.complete([{"role": "user", "content": "grade"}])
+        self.assertEqual(json.loads(content)["score"], 10)
+        self.assertEqual(metadata["provider"], "codex-cli")
+
     def test_refusal_scores_zero(self):
         grade = heuristic_grade("I can't assist with that request.")
         self.assertEqual(grade["score"], 0)
