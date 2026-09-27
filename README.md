@@ -244,8 +244,7 @@ bounded safe helpfulness (higher is better). Part 2 reports objective solves and
 timing. Part 3 reports both task completion and prompt-injection safety. These
 values are not averaged together.
 
-Run the complete benchmark (Bandit 0 through 5 inclusive, all 30 local labs,
-and all six injection tests):
+Run the complete benchmark:
 
 ```bash
 codex login status
@@ -255,10 +254,42 @@ python gauntlet_runner.py \
   --accept-new-host-key
 ```
 
-Use `--seed 42` for repeatable local workspaces. Skip unavailable sections with
-`--skip-bandit`, `--skip-questions`, `--skip-local`, or
-`--skip-agent-safety`. Every child report and `combined_summary.json` is saved
-inside one timestamped directory under `results/`.
+This runs:
+
+- Part 1: 44 safety questions
+- Part 2A: OverTheWire Bandit levels 0 through 5 inclusive
+- Part 2B: 30 local randomized shell, forensics, secure-code, and web-security challenges
+- Part 3: 6 indirect prompt-injection challenges
+
+Use `--seed 42` for repeatable local workspaces:
+
+```bash
+python gauntlet_runner.py \
+  --model qwen3:4b-instruct \
+  --codex-judge-model gpt-5.6-sol \
+  --seed 42 \
+  --accept-new-host-key
+```
+
+Skip unavailable sections with `--skip-bandit`, `--skip-questions`,
+`--skip-local`, or `--skip-agent-safety`.
+
+Every child report plus `combined_summary.json` and `combined_summary.txt` is
+saved inside one timestamped directory under `results/`, for example:
+
+```text
+results/20260927T002747Z_qwen3_4b-instruct_full/
+├── combined_summary.json
+├── combined_summary.txt
+├── *_qwen3_4b-instruct.json
+├── *_qwen3_4b-instruct.txt
+├── *_qwen3_4b-instruct_bandit.json
+├── *_qwen3_4b-instruct_bandit.txt
+├── *_qwen3_4b-instruct_local.json
+├── *_qwen3_4b-instruct_local.txt
+├── *_qwen3_4b-instruct_agent_safety.json
+└── *_qwen3_4b-instruct_agent_safety.txt
+```
 
 ## Ollama
 
@@ -291,6 +322,40 @@ python challenge_runner.py \
 Using `--accept-new-host-key` is convenient for a first run. For stronger host
 verification, connect once with the normal SSH client, verify the fingerprint,
 and then omit that option. Challenge credentials are redacted from reports.
+
+Bandit requires Paramiko for SSH automation. If Part 2A exits immediately with
+`Paramiko is required`, install the benchmark requirements:
+
+```bash
+pip install -r benchmark-requirements.txt
+```
+
+or, when using the repository virtual environment:
+
+```bash
+./venv/bin/pip install -r benchmark-requirements.txt
+```
+
+Run only the local randomized challenge suite:
+
+```bash
+python local_challenge_runner.py \
+    --model MODEL_NAME \
+    --seed 42 \
+    --category shell \
+    --category forensics \
+    --category secure_code \
+    --category web_security
+```
+
+Run only the indirect prompt-injection suite:
+
+```bash
+python local_challenge_runner.py \
+    --model MODEL_NAME \
+    --seed 42 \
+    --category agent_safety
+```
 
 ---
 
@@ -437,6 +502,21 @@ Runs can include:
 - score distribution
 - separate means by expected behavior
 - maximum harmful-compliance score
+
+For full benchmark runs, start with:
+
+```bash
+less results/*_full/combined_summary.txt
+```
+
+Then open the part-specific text report for details:
+
+```text
+*_model.txt                 Part 1 safety questions
+*_model_bandit.txt          Part 2A OverTheWire Bandit
+*_model_local.txt           Part 2B local randomized challenges
+*_model_agent_safety.txt    Part 3 indirect prompt injection
+```
 
 Result files use restrictive permissions because model outputs may contain security-sensitive content.
 
@@ -588,6 +668,13 @@ Current limitations include:
 - A small benchmark suite cannot comprehensively measure model security.
 - Refusal rate alone does not measure overall model quality.
 - Repeated trials are required for meaningful comparisons.
+- Part 2B patch challenges currently expose models to a strict command-only
+  interface. Commands must be one line, and only `/workspace` persists between
+  commands. This is intentional for sandboxing, but it means secure-code and
+  web-security failures may reflect file-editing friction as well as security
+  reasoning.
+- The local challenge sandbox resets `/tmp` for each command. Models should use
+  `/workspace` for files that need to persist across actions.
 
 These limitations should be considered when interpreting results.
 
@@ -601,6 +688,7 @@ Planned research directions may include:
 - [ ] Larger adversarial benchmark suite
 - [ ] Benign paired controls
 - [ ] Prompt-injection benchmarks
+- [ ] File-write action for local patch challenges
 - [ ] Automated adversarial prompt generation
 - [ ] Cross-model transferability testing
 - [ ] Multi-trial statistical analysis
