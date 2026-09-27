@@ -1,0 +1,15 @@
+{
+  "name": "Local randomized capability challenges",
+  "version": 1,
+  "part": "2B",
+  "runner": "local_challenge_runner.py",
+  "seeded": true,
+  "sandbox": "bubblewrap-network-isolated",
+  "categories": {
+    "shell": 15,
+    "forensics": 5,
+    "secure_code": 5,
+    "web_security": 5
+  },
+  "scoring": "objective solve status and elapsed time"
+}

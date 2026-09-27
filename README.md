@@ -4,9 +4,9 @@
 
 Clanker Gauntlet is a research-oriented framework for evaluating how large language models behave under adversarial and security-sensitive interactions.
 
-The benchmark has two parts. It runs structured, multi-turn safety questions and
-also measures whether a model can solve objectively verified, timed security
-challenges. The initial challenge adapter supports OverTheWire Bandit.
+The benchmark has three parts: graded safety questions, objectively verified
+security challenges (OverTheWire and randomized local labs), and indirect
+prompt-injection tests for tool-using agents.
 
 The project is intended for controlled AI security research, model comparison, and experimentation with emerging LLM attack surfaces such as prompt manipulation and memory poisoning.
 
@@ -32,6 +32,10 @@ The project is intended for controlled AI security research, model comparison, a
 - Run timed OverTheWire Bandit challenges through a constrained SSH harness
 - Verify a solve by authenticating to the next level rather than trusting model output
 - Redact OverTheWire credentials from saved results
+- Generate 30 seeded local shell, forensics, secure-code, and web-security labs
+- Run model commands inside disposable, network-isolated Bubblewrap sandboxes
+- Measure indirect prompt-injection resistance with six synthetic canary tests
+- Run every part and produce a combined status report with one command
 
 ---
 
@@ -142,7 +146,9 @@ security-benchmark/
 ├── benchmarks/
 │   ├── part1_safety.json
 │   ├── refusal_memory.json (legacy suite)
-│   └── overthewire_bandit.json
+│   ├── overthewire_bandit.json
+│   ├── local_randomized.json
+│   └── agent_safety.json
 │
 ├── platform/
 │
@@ -151,6 +157,8 @@ security-benchmark/
 ├── BENCHMARK.md
 ├── benchmark_runner.py
 ├── challenge_runner.py
+├── local_challenge_runner.py
+├── gauntlet_runner.py
 ├── benchmark-requirements.txt
 ├── cheat_test.py
 ├── dashboard.py
@@ -175,6 +183,17 @@ Timed agent loop for OverTheWire Bandit. It fetches current goals from the
 official site, executes constrained commands over SSH, and verifies each solve by
 logging in as the next level. See `BENCHMARK.md` for safety and credential-handling
 details.
+
+**`local_challenge_runner.py`**
+
+Creates seeded, disposable Part 2B and Part 3 workspaces, runs model-selected
+commands without network access, and verifies solutions objectively. Model-written
+secure-code and web-code fixes are tested inside the sandbox.
+
+**`gauntlet_runner.py`**
+
+Runs Parts 1, 2A, 2B, and 3 in sequence. Part 1 uses Codex CLI as its judge by
+default; challenge parts use exact verifiers rather than subjective LLM grading.
 
 **`BENCHMARK.md`**
 
@@ -219,10 +238,27 @@ platform and benchmark-runner dependencies.
 
 # Quick Start
 
-The two parts deliberately produce separate results. Part 1 itself reports
+The parts deliberately produce separate results. Part 1 itself reports
 harmful compliance (lower is safer), benign utility (higher is better), and
 bounded safe helpfulness (higher is better). Part 2 reports objective solves and
-timing. These values are not averaged together.
+timing. Part 3 reports both task completion and prompt-injection safety. These
+values are not averaged together.
+
+Run the complete benchmark (Bandit 0 through 5 inclusive, all 30 local labs,
+and all six injection tests):
+
+```bash
+codex login status
+python gauntlet_runner.py \
+  --model MODEL_NAME \
+  --codex-judge-model gpt-5.6-sol \
+  --accept-new-host-key
+```
+
+Use `--seed 42` for repeatable local workspaces. Skip unavailable sections with
+`--skip-bandit`, `--skip-questions`, `--skip-local`, or
+`--skip-agent-safety`. Every child report and `combined_summary.json` is saved
+inside one timestamped directory under `results/`.
 
 ## Ollama
 
@@ -244,7 +280,7 @@ The default OpenAI-compatible endpoint is:
 http://localhost:11434/v1
 ```
 
-Run the default timed Bandit challenge set (levels 0 through 4):
+Run the default timed Bandit challenge set (levels 0 through 5):
 
 ```bash
 python challenge_runner.py \

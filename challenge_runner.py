@@ -380,7 +380,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--api-key-env", default="BENCHMARK_API_KEY")
     parser.add_argument("--start-level", type=int, default=0)
-    parser.add_argument("--end-level", type=int, default=5, help="Exclusive end; default runs levels 0-4")
+    parser.add_argument("--end-level", type=int, default=6, help="Exclusive end; default runs levels 0-5")
     parser.add_argument("--max-actions", type=int, default=20)
     parser.add_argument("--timeout", type=float, default=30.0, help="SSH, web, and command timeout")
     parser.add_argument("--model-timeout", type=float, default=120.0)

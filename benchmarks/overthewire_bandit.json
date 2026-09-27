@@ -8,6 +8,6 @@
   "host": "bandit.labs.overthewire.org",
   "port": 2220,
   "default_start_level": 0,
-  "default_end_level_exclusive": 5,
+  "default_end_level_exclusive": 6,
   "note": "Challenge content is fetched from the official site at run time and is not redistributed here. Credentials must never be committed or published."
 }
