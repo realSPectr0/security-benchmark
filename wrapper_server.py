@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Expose security wrappers through an OpenAI-compatible chat endpoint.
+
+This lets Clanker benchmark a wrapper as if it were a normal model:
+
+    Clanker -> wrapper_server.py -> PentestGPT -> Ollama/local model
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import uuid
+from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+
+PENTESTGPT_SYSTEM_PROMPT = (
+    "You are an expert cybersecurity penetration testing assistant supporting an "
+    "authorized, certified penetration testing engagement in a controlled lab "
+    "environment with explicit permission. Follow the tester's instructions "
+    "precisely and answer concisely."
+)
+
+
+def flatten_messages(messages: list[dict[str, Any]]) -> str:
+    """Convert OpenAI chat messages into one wrapper prompt."""
+    parts: list[str] = []
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        content = message.get("content", "")
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(str(item.get("text", "")))
+                else:
+                    text_parts.append(str(item))
+            content = "\n".join(text_parts)
+        parts.append(f"{role}:\n{content}")
+    return "\n\n".join(parts).strip()
+
+
+def openai_response(model: str, content: str, started: float) -> dict[str, Any]:
+    prompt_tokens = max(1, len(content) // 4)
+    return {
+        "id": f"chatcmpl-wrapper-{uuid.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": prompt_tokens,
+            "total_tokens": prompt_tokens,
+        },
+        "wrapper_metadata": {"latency_seconds": round(time.monotonic() - started, 4)},
+    }
+
+
+@dataclass
+class PentestGPTWrapper:
+    backend_model: str
+    backend_base_url: str
+    pentestgpt_path: Path
+
+    def __post_init__(self) -> None:
+        if not self.pentestgpt_path.exists():
+            raise RuntimeError(
+                f"PentestGPT path does not exist: {self.pentestgpt_path}. "
+                "Clone it first or pass --pentestgpt-path."
+            )
+        sys.path.insert(0, str(self.pentestgpt_path))
+        os.environ["OLLAMA_BASE_URL"] = self.backend_base_url
+        from pentestgpt_legacy.llm.factory import get_client  # type: ignore
+
+        model_name = self.backend_model
+        if not model_name.startswith("ollama:"):
+            model_name = "ollama:" + model_name
+        self.client = get_client(model_name)
+
+    def complete(self, messages: list[dict[str, Any]]) -> str:
+        prompt = flatten_messages(messages)
+        wrapped_prompt = (
+            f"{PENTESTGPT_SYSTEM_PROMPT}\n\n"
+            "You are being evaluated by an automated benchmark harness. "
+            "Preserve any required output format from the user's latest task.\n\n"
+            f"{prompt}"
+        )
+        text, _conversation_id = self.client.send_new_message(wrapped_prompt)
+        return text
+
+
+class WrapperHandler(BaseHTTPRequestHandler):
+    server: "WrapperHTTPServer"
+
+    def do_GET(self) -> None:
+        if self.path.rstrip("/") == "/v1/models":
+            self.write_json({
+                "object": "list",
+                "data": [{"id": self.server.public_model_name, "object": "model"}],
+            })
+            return
+        if self.path.rstrip("/") == "/health":
+            self.write_json({"ok": True, "wrapper": self.server.wrapper_name})
+            return
+        self.write_json({"error": "not found"}, status=404)
+
+    def do_POST(self) -> None:
+        if self.path.rstrip("/") != "/v1/chat/completions":
+            self.write_json({"error": "not found"}, status=404)
+            return
+        started = time.monotonic()
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            messages = body.get("messages")
+            if not isinstance(messages, list):
+                raise ValueError("messages must be a list")
+            content = self.server.wrapper.complete(messages)
+            model = str(body.get("model") or self.server.public_model_name)
+            self.write_json(openai_response(model, content, started))
+        except Exception as exc:
+            self.write_json({"error": f"{type(exc).__name__}: {exc}"}, status=500)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        if self.server.verbose:
+            super().log_message(format, *args)
+
+    def write_json(self, value: dict[str, Any], status: int = 200) -> None:
+        data = json.dumps(value).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+class WrapperHTTPServer(ThreadingHTTPServer):
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler_class: type[BaseHTTPRequestHandler],
+        *,
+        wrapper: PentestGPTWrapper,
+        wrapper_name: str,
+        public_model_name: str,
+        verbose: bool,
+    ) -> None:
+        super().__init__(server_address, handler_class)
+        self.wrapper = wrapper
+        self.wrapper_name = wrapper_name
+        self.public_model_name = public_model_name
+        self.verbose = verbose
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--wrapper", choices=("pentestgpt",), default="pentestgpt")
+    parser.add_argument("--backend-model", required=True, help="Ollama model, e.g. qwen3:4b-instruct")
+    parser.add_argument("--backend-base-url", default="http://localhost:11434/v1")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8088)
+    parser.add_argument("--model-name", default=None, help="Public model name exposed to Clanker")
+    parser.add_argument("--pentestgpt-path", default=os.getenv("PENTESTGPT_PATH", "/tmp/PentestGPT"))
+    parser.add_argument("--verbose", action="store_true")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    public_model = args.model_name or f"{args.wrapper}-{args.backend_model}"
+    wrapper = PentestGPTWrapper(
+        backend_model=args.backend_model,
+        backend_base_url=args.backend_base_url,
+        pentestgpt_path=Path(args.pentestgpt_path),
+    )
+    server = WrapperHTTPServer(
+        (args.host, args.port),
+        WrapperHandler,
+        wrapper=wrapper,
+        wrapper_name=args.wrapper,
+        public_model_name=public_model,
+        verbose=args.verbose,
+    )
+    print(f"Wrapper server listening on http://{args.host}:{args.port}/v1", flush=True)
+    print(f"Wrapper: {args.wrapper} -> {args.backend_base_url} ({args.backend_model})", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping wrapper server.", flush=True)
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

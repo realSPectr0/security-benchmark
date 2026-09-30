@@ -378,6 +378,72 @@ This allows the benchmark to work with compatible inference servers such as:
 
 ---
 
+## Security Wrapper Targets
+
+Security wrappers can be benchmarked by exposing them through the included
+OpenAI-compatible adapter. The first supported wrapper is PentestGPT legacy with
+a local Ollama backend.
+
+Start the wrapper server in one terminal:
+
+```bash
+python wrapper_server.py \
+    --wrapper pentestgpt \
+    --pentestgpt-path /tmp/PentestGPT \
+    --backend-model qwen3:4b-instruct \
+    --backend-base-url http://localhost:11434/v1 \
+    --port 8088
+```
+
+Then run Clanker against the wrapper endpoint from another terminal:
+
+```bash
+python gauntlet_runner.py \
+    --model pentestgpt-qwen3 \
+    --base-url http://localhost:8088/v1 \
+    --codex-judge-model gpt-5.6-sol \
+    --seed 42 \
+    --accept-new-host-key
+```
+
+This compares the wrapper stack:
+
+```text
+Clanker -> wrapper_server.py -> PentestGPT -> Ollama -> qwen3:4b-instruct
+```
+
+against the raw model stack:
+
+```text
+Clanker -> Ollama -> qwen3:4b-instruct
+```
+
+If PentestGPT is not cloned yet:
+
+```bash
+git clone https://github.com/GreyDGL/PentestGPT.git /tmp/PentestGPT
+cd /tmp/PentestGPT
+env UV_CACHE_DIR=/tmp/uv-cache-clanker uv run pentestgpt-legacy --list-models
+```
+
+The adapter requires PentestGPT dependencies to be available in the Python
+environment running `wrapper_server.py`. For quick local experiments, run the
+server with the same `uv` environment from the PentestGPT checkout:
+
+```bash
+cd /tmp/PentestGPT
+env UV_CACHE_DIR=/tmp/uv-cache-clanker \
+    OLLAMA_BASE_URL=http://localhost:11434/v1 \
+    uv run python /path/to/ClankerGantlet/wrapper_server.py \
+        --wrapper pentestgpt \
+        --pentestgpt-path /tmp/PentestGPT \
+        --backend-model qwen3:4b-instruct \
+        --backend-base-url http://localhost:11434/v1 \
+        --port 8088
+```
+
+---
+
 # API Authentication
 
 API keys are read from environment variables.
