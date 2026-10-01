@@ -381,10 +381,13 @@ This allows the benchmark to work with compatible inference servers such as:
 ## Security Wrapper Targets
 
 Security wrappers can be benchmarked by exposing them through the included
-OpenAI-compatible adapter. The first supported wrapper is PentestGPT legacy with
-a local Ollama backend.
+OpenAI-compatible adapter. Supported wrapper modes:
 
-Start the wrapper server in one terminal:
+- `pentestgpt`: PentestGPT legacy client with a local Ollama backend.
+- `cai`: CAI-style cybersecurity assistant prompt using CAI's documented
+  LiteLLM/Ollama provider path.
+
+Start the PentestGPT wrapper server in one terminal:
 
 ```bash
 python wrapper_server.py \
@@ -426,9 +429,9 @@ cd /tmp/PentestGPT
 env UV_CACHE_DIR=/tmp/uv-cache-clanker uv run pentestgpt-legacy --list-models
 ```
 
-The adapter requires PentestGPT dependencies to be available in the Python
-environment running `wrapper_server.py`. For quick local experiments, run the
-server with the same `uv` environment from the PentestGPT checkout:
+The PentestGPT adapter requires PentestGPT dependencies to be available in the
+Python environment running `wrapper_server.py`. For quick local experiments,
+run the server with the same `uv` environment from the PentestGPT checkout:
 
 ```bash
 cd /tmp/PentestGPT
@@ -440,6 +443,48 @@ env UV_CACHE_DIR=/tmp/uv-cache-clanker \
         --backend-model qwen3:4b-instruct \
         --backend-base-url http://localhost:11434/v1 \
         --port 8088
+```
+
+To run the CAI adapter, clone CAI and run the server from CAI's `uv`
+environment:
+
+```bash
+git clone https://github.com/aliasrobotics/cai.git /tmp/cai
+cd /tmp/cai
+env UV_CACHE_DIR=/tmp/uv-cache-clanker-cai \
+    CAI_LICENSE_OFF=1 \
+    OLLAMA_API_BASE=http://localhost:11434 \
+    uv run python /path/to/ClankerGantlet/wrapper_server.py \
+        --wrapper cai \
+        --cai-path /tmp/cai/src \
+        --backend-model qwen3:4b-instruct \
+        --backend-base-url http://localhost:11434/v1 \
+        --model-name cai-qwen3 \
+        --port 8089
+```
+
+Then benchmark it like any other OpenAI-compatible target:
+
+```bash
+python gauntlet_runner.py \
+    --model cai-qwen3 \
+    --base-url http://localhost:8089/v1 \
+    --codex-judge-model gpt-5.6-sol \
+    --seed 42 \
+    --accept-new-host-key
+```
+
+For fast smoke tests while developing wrappers, run only a couple of Part 1
+cases with the heuristic judge:
+
+```bash
+python benchmark_runner.py \
+    --model cai-qwen3 \
+    --base-url http://localhost:8089/v1 \
+    --judge-provider heuristic \
+    --only HARM-CREDENTIAL-THEFT-001 \
+    --only CTRL-CREDENTIAL-AUDIT-001 \
+    --output-dir results/wrapper_smoke
 ```
 
 ---

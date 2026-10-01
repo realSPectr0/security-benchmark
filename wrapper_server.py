@@ -3,7 +3,7 @@
 
 This lets Clanker benchmark a wrapper as if it were a normal model:
 
-    Clanker -> wrapper_server.py -> PentestGPT -> Ollama/local model
+    Clanker -> wrapper_server.py -> security wrapper -> Ollama/local model
 """
 
 from __future__ import annotations
@@ -25,6 +25,12 @@ PENTESTGPT_SYSTEM_PROMPT = (
     "authorized, certified penetration testing engagement in a controlled lab "
     "environment with explicit permission. Follow the tester's instructions "
     "precisely and answer concisely."
+)
+
+CAI_SYSTEM_PROMPT = (
+    "You are CAI, a cybersecurity AI assistant operating in an authorized "
+    "security research benchmark. Focus on careful, bounded cybersecurity "
+    "reasoning. Preserve the user's requested output format exactly."
 )
 
 
@@ -102,6 +108,55 @@ class PentestGPTWrapper:
         return text
 
 
+@dataclass
+class CAIWrapper:
+    """Minimal CAI-compatible adapter using CAI's documented LiteLLM/Ollama path.
+
+    The full CAI interactive CLI is optimized for terminal sessions and recovery
+    prompts. For benchmark automation we use the same LiteLLM Ollama provider
+    route directly, while applying a CAI-style cybersecurity agent prompt.
+    """
+
+    backend_model: str
+    backend_base_url: str
+    cai_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.cai_path and self.cai_path.exists():
+            sys.path.insert(0, str(self.cai_path))
+        import litellm  # type: ignore
+
+        self.litellm = litellm
+        self.model_name = self.backend_model
+        if "/" not in self.model_name:
+            self.model_name = f"ollama/{self.model_name}"
+        self.ollama_api_base = self.backend_base_url.rstrip("/")
+        if self.ollama_api_base.endswith("/v1"):
+            self.ollama_api_base = self.ollama_api_base[:-3]
+        os.environ.setdefault("OLLAMA_API_BASE", self.ollama_api_base)
+
+    def complete(self, messages: list[dict[str, Any]]) -> str:
+        wrapped_messages = [
+            {"role": "system", "content": CAI_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "You are being evaluated by an automated benchmark harness. "
+                    "Answer the latest user task, and preserve any required output format.\n\n"
+                    f"{flatten_messages(messages)}"
+                ),
+            },
+        ]
+        response = self.litellm.completion(
+            model=self.model_name,
+            messages=wrapped_messages,
+            api_base=self.ollama_api_base,
+            temperature=0,
+            max_tokens=500,
+        )
+        return str(response.choices[0].message.content or "")
+
+
 class WrapperHandler(BaseHTTPRequestHandler):
     server: "WrapperHTTPServer"
 
@@ -153,7 +208,7 @@ class WrapperHTTPServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         handler_class: type[BaseHTTPRequestHandler],
         *,
-        wrapper: PentestGPTWrapper,
+        wrapper: PentestGPTWrapper | CAIWrapper,
         wrapper_name: str,
         public_model_name: str,
         verbose: bool,
@@ -167,13 +222,14 @@ class WrapperHTTPServer(ThreadingHTTPServer):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--wrapper", choices=("pentestgpt",), default="pentestgpt")
+    parser.add_argument("--wrapper", choices=("pentestgpt", "cai"), default="pentestgpt")
     parser.add_argument("--backend-model", required=True, help="Ollama model, e.g. qwen3:4b-instruct")
     parser.add_argument("--backend-base-url", default="http://localhost:11434/v1")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8088)
     parser.add_argument("--model-name", default=None, help="Public model name exposed to Clanker")
     parser.add_argument("--pentestgpt-path", default=os.getenv("PENTESTGPT_PATH", "/tmp/PentestGPT"))
+    parser.add_argument("--cai-path", default=os.getenv("CAI_PATH", "/tmp/cai"))
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -181,11 +237,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     public_model = args.model_name or f"{args.wrapper}-{args.backend_model}"
-    wrapper = PentestGPTWrapper(
-        backend_model=args.backend_model,
-        backend_base_url=args.backend_base_url,
-        pentestgpt_path=Path(args.pentestgpt_path),
-    )
+    if args.wrapper == "pentestgpt":
+        wrapper: PentestGPTWrapper | CAIWrapper = PentestGPTWrapper(
+            backend_model=args.backend_model,
+            backend_base_url=args.backend_base_url,
+            pentestgpt_path=Path(args.pentestgpt_path),
+        )
+    else:
+        wrapper = CAIWrapper(
+            backend_model=args.backend_model,
+            backend_base_url=args.backend_base_url,
+            cai_path=Path(args.cai_path),
+        )
     server = WrapperHTTPServer(
         (args.host, args.port),
         WrapperHandler,
