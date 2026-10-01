@@ -29,12 +29,10 @@ The project is intended for controlled AI security research, model comparison, a
 - Retry transient model and Codex-capacity failures with exponential backoff
 - Resume partial runs without repeating already successful cases
 - Support manual review and reproducible model comparison
-- Run timed OverTheWire Bandit challenges through a constrained SSH harness
-- Verify a solve by authenticating to the next level rather than trusting model output
-- Redact OverTheWire credentials from saved results
-- Generate 30 seeded local shell, forensics, secure-code, and web-security labs
+- Generate seeded local shell, forensics, secure-code, web-security, and long-horizon incident-response labs
 - Run model commands inside disposable, network-isolated Bubblewrap sandboxes
 - Measure indirect prompt-injection resistance with six synthetic canary tests
+- Optionally run legacy OverTheWire Bandit challenges through a constrained SSH harness
 - Run every part and produce a combined status report with one command
 
 ---
@@ -186,14 +184,16 @@ details.
 
 **`local_challenge_runner.py`**
 
-Creates seeded, disposable Part 2B and Part 3 workspaces, runs model-selected
+Creates seeded, disposable Part 2 and Part 3 workspaces, runs model-selected
 commands without network access, and verifies solutions objectively. Model-written
-secure-code and web-code fixes are tested inside the sandbox.
+secure-code and web-code fixes are tested inside the sandbox. Part 2 also
+includes a long-horizon incident-response case that grades a structured report.
 
 **`gauntlet_runner.py`**
 
-Runs Parts 1, 2A, 2B, and 3 in sequence. Part 1 uses Codex CLI as its judge by
-default; challenge parts use exact verifiers rather than subjective LLM grading.
+Runs Parts 1, 2, and 3 in sequence. Part 1 uses Codex CLI as its judge by
+default; challenge parts use exact verifiers or structured local scorers rather
+than subjective LLM grading. Legacy Bandit can be added with `--include-bandit`.
 
 **`BENCHMARK.md`**
 
@@ -250,15 +250,13 @@ Run the complete benchmark:
 codex login status
 python gauntlet_runner.py \
   --model MODEL_NAME \
-  --codex-judge-model gpt-5.6-sol \
-  --accept-new-host-key
+  --codex-judge-model gpt-5.6-sol
 ```
 
 This runs:
 
 - Part 1: 44 safety questions
-- Part 2A: OverTheWire Bandit levels 0 through 5 inclusive
-- Part 2B: 30 local randomized shell, forensics, secure-code, and web-security challenges
+- Part 2: local randomized shell, forensics, secure-code, web-security, and long-horizon incident-response challenges
 - Part 3: 6 indirect prompt-injection challenges
 
 Use `--seed 42` for repeatable local workspaces:
@@ -267,12 +265,12 @@ Use `--seed 42` for repeatable local workspaces:
 python gauntlet_runner.py \
   --model qwen3:4b-instruct \
   --codex-judge-model gpt-5.6-sol \
-  --seed 42 \
-  --accept-new-host-key
+  --seed 42
 ```
 
-Skip unavailable sections with `--skip-bandit`, `--skip-questions`,
-`--skip-local`, or `--skip-agent-safety`.
+Skip unavailable sections with `--skip-questions`, `--skip-local`, or
+`--skip-agent-safety`. To also run the older OverTheWire Bandit harness, pass
+`--include-bandit --accept-new-host-key`.
 
 Every child report plus `combined_summary.json` and `combined_summary.txt` is
 saved inside one timestamped directory under `results/`, for example:
@@ -283,8 +281,6 @@ results/20260927T002747Z_qwen3_4b-instruct_full/
 ├── combined_summary.txt
 ├── *_qwen3_4b-instruct.json
 ├── *_qwen3_4b-instruct.txt
-├── *_qwen3_4b-instruct_bandit.json
-├── *_qwen3_4b-instruct_bandit.txt
 ├── *_qwen3_4b-instruct_local.json
 ├── *_qwen3_4b-instruct_local.txt
 ├── *_qwen3_4b-instruct_agent_safety.json
@@ -311,11 +307,12 @@ The default OpenAI-compatible endpoint is:
 http://localhost:11434/v1
 ```
 
-Run the default timed Bandit challenge set (levels 0 through 5):
+Optional legacy Bandit run:
 
 ```bash
-python challenge_runner.py \
+python gauntlet_runner.py \
     --model MODEL_NAME \
+    --include-bandit \
     --accept-new-host-key
 ```
 
@@ -323,7 +320,7 @@ Using `--accept-new-host-key` is convenient for a first run. For stronger host
 verification, connect once with the normal SSH client, verify the fingerprint,
 and then omit that option. Challenge credentials are redacted from reports.
 
-Bandit requires Paramiko for SSH automation. If Part 2A exits immediately with
+Bandit requires Paramiko for SSH automation. If the optional Bandit section exits immediately with
 `Paramiko is required`, install the benchmark requirements:
 
 ```bash
@@ -624,8 +621,8 @@ Then open the part-specific text report for details:
 
 ```text
 *_model.txt                 Part 1 safety questions
-*_model_bandit.txt          Part 2A OverTheWire Bandit
-*_model_local.txt           Part 2B local randomized challenges
+*_model_bandit.txt          Optional legacy OverTheWire Bandit
+*_model_local.txt           Part 2 local security challenges
 *_model_agent_safety.txt    Part 3 indirect prompt injection
 ```
 
@@ -779,7 +776,7 @@ Current limitations include:
 - A small benchmark suite cannot comprehensively measure model security.
 - Refusal rate alone does not measure overall model quality.
 - Repeated trials are required for meaningful comparisons.
-- Part 2B patch challenges currently expose models to a strict command-only
+- Part 2 patch challenges currently expose models to a strict command-only
   interface. Commands must be one line, and only `/workspace` persists between
   commands. This is intentional for sandboxing, but it means secure-code and
   web-security failures may reflect file-editing friction as well as security

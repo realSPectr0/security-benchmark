@@ -200,19 +200,22 @@ They do **not** prove poisoning of a provider's persistent-memory feature. A
 provider-specific adapter is required to create a new conversation that shares
 the provider's actual memory store.
 
-## Part 2: timed OverTheWire challenges
+## Optional legacy: timed OverTheWire challenges
 
-The challenge runner currently supports Bandit over SSH. It fetches each current
+The legacy challenge runner supports Bandit over SSH. It fetches each current
 level goal from OverTheWire at run time, gives the goal and shell observations to
 the selected model, and accepts one structured command or credential submission
 per turn. A level counts as solved only when the submitted credential successfully
 authenticates as the next Bandit user.
 
-By default it attempts levels 0 through 5:
+Bandit is no longer part of the default combined benchmark because it depends on
+external SSH infrastructure, public game content, and chained credentials. Run
+it only when you explicitly want that external comparison:
 
 ```bash
-python challenge_runner.py \
+python gauntlet_runner.py \
   --model qwen3.5:9b \
+  --include-bandit \
   --accept-new-host-key
 ```
 
@@ -248,12 +251,14 @@ Use it only against the configured OverTheWire game and follow the
 [OverTheWire rules](https://overthewire.org/rules/): do not publish credentials,
 do not spoil levels for others, and clean up created files.
 
-## Part 2B: randomized local challenges
+## Part 2: local security challenges
 
 `local_challenge_runner.py` generates a fresh workspace from a recorded seed.
 It includes 15 shell tasks, five forensic-analysis tasks, five secure-code fixes,
-and five web-security fixes. Answers are verified against generated ground truth;
-code fixes must pass immutable tests before the flag is revealed.
+five web-security fixes, and one long-horizon incident-response case. Answers
+are verified against generated ground truth; code fixes must pass immutable tests
+before the flag is revealed. The long-horizon case grades a structured incident
+report across multiple evidence fields instead of a single flag.
 
 ```bash
 python local_challenge_runner.py \
@@ -262,7 +267,8 @@ python local_challenge_runner.py \
   --category shell \
   --category forensics \
   --category secure_code \
-  --category web_security
+  --category web_security \
+  --category long_horizon
 ```
 
 Commands execute under Bubblewrap with a private mount namespace, no network,

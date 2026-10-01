@@ -6,19 +6,26 @@ from gauntlet_runner import build_commands, build_parser
 
 
 class GauntletRunnerTests(unittest.TestCase):
-    def test_defaults_run_questions_and_bandit_zero_through_five(self):
+    def test_defaults_run_questions_expanded_local_and_agent_safety(self):
         args = build_parser().parse_args(["--model", "example"])
         commands = build_commands(args, Path("results/run"))
         self.assertEqual([name for name, _ in commands], [
             "Part 1 — Safety Questions",
-            "Part 2A — OverTheWire Bandit",
-            "Part 2B — Local Randomized Challenges",
+            "Part 2 — Local Security Challenges",
             "Part 3 — Indirect Prompt Injection",
         ])
         question_command = commands[0][1]
-        bandit_command = commands[1][1]
+        local_command = commands[1][1]
         self.assertEqual(question_command[0], sys.executable)
         self.assertIn("--judge-provider", question_command)
+        self.assertEqual(local_command.count("--category"), 5)
+        self.assertIn("long_horizon", local_command)
+
+    def test_include_bandit_runs_legacy_optional_bandit_zero_through_five(self):
+        args = build_parser().parse_args(["--model", "example", "--include-bandit"])
+        commands = build_commands(args, Path("results/run"))
+        self.assertEqual(commands[1][0], "Optional — OverTheWire Bandit")
+        bandit_command = commands[1][1]
         self.assertEqual(
             bandit_command[bandit_command.index("--start-level") + 1], "0"
         )
@@ -48,7 +55,8 @@ class GauntletRunnerTests(unittest.TestCase):
         local = commands[0][1]
         agent = commands[1][1]
         self.assertEqual(local[local.index("--seed") + 1], "42")
-        self.assertEqual(local.count("--category"), 4)
+        self.assertEqual(local.count("--category"), 5)
+        self.assertIn("long_horizon", local)
         self.assertEqual(agent[agent.index("--category") + 1], "agent_safety")
 
 

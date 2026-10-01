@@ -25,7 +25,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key-env", default="BENCHMARK_API_KEY")
     parser.add_argument("--output-dir", default="results")
     parser.add_argument("--skip-questions", action="store_true")
-    parser.add_argument("--skip-bandit", action="store_true")
+    parser.add_argument("--include-bandit", action="store_true", help="Also run legacy optional OverTheWire Bandit")
+    parser.add_argument("--skip-bandit", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--skip-local", action="store_true")
     parser.add_argument("--skip-agent-safety", action="store_true")
 
@@ -42,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     questions.add_argument("--question-timeout", type=float, default=120.0)
     questions.add_argument("--resume-questions-from")
 
-    bandit = parser.add_argument_group("Part 2A Bandit")
+    bandit = parser.add_argument_group("Optional legacy Bandit")
     bandit.add_argument("--start-level", type=int, default=0)
     bandit.add_argument("--end-level", type=int, default=6)
     bandit.add_argument("--max-actions", type=int, default=20)
@@ -50,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     bandit.add_argument("--model-timeout", type=float, default=120.0)
     bandit.add_argument("--accept-new-host-key", action="store_true")
 
-    local = parser.add_argument_group("Part 2B local and Part 3 agent safety")
+    local = parser.add_argument_group("Part 2 local and Part 3 agent safety")
     local.add_argument("--seed", type=int)
     local.add_argument("--local-max-actions", type=int, default=20)
     local.add_argument("--local-command-timeout", type=float, default=10.0)
@@ -84,7 +85,7 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
             command.extend(["--resume-from", args.resume_questions_from])
         commands.append(("Part 1 — Safety Questions", command))
 
-    if not args.skip_bandit:
+    if args.include_bandit and not args.skip_bandit:
         command = [
             sys.executable,
             str(ROOT / "challenge_runner.py"),
@@ -97,7 +98,7 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
         ]
         if args.accept_new_host_key:
             command.append("--accept-new-host-key")
-        commands.append(("Part 2A — OverTheWire Bandit", command))
+        commands.append(("Optional — OverTheWire Bandit", command))
 
     local_common = [
         sys.executable,
@@ -111,9 +112,9 @@ def build_commands(args: argparse.Namespace, run_dir: Path) -> list[tuple[str, l
         local_common.extend(["--seed", str(args.seed)])
     if not args.skip_local:
         command = [*local_common]
-        for category in ("shell", "forensics", "secure_code", "web_security"):
+        for category in ("shell", "forensics", "secure_code", "web_security", "long_horizon"):
             command.extend(["--category", category])
-        commands.append(("Part 2B — Local Randomized Challenges", command))
+        commands.append(("Part 2 — Local Security Challenges", command))
     if not args.skip_agent_safety:
         command = [*local_common, "--category", "agent_safety"]
         commands.append(("Part 3 — Indirect Prompt Injection", command))
@@ -137,7 +138,9 @@ def secure_write_text(path: Path, value: str) -> None:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if all((args.skip_questions, args.skip_bandit, args.skip_local, args.skip_agent_safety)):
+    if all((args.skip_questions, args.skip_local, args.skip_agent_safety)) and not (
+        args.include_bandit and not args.skip_bandit
+    ):
         raise ValueError("At least one benchmark part must be enabled")
     if args.judge_provider == "api" and not args.judge_model:
         raise ValueError("--judge-model is required with --judge-provider api")
